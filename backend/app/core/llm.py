@@ -1,13 +1,13 @@
 import os
+from anthropic import Anthropic
 from dotenv import load_dotenv
-from google import genai
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-MODEL = "gemini-2.5-flash"
-
+client = Anthropic(
+    api_key=os.getenv("ANTHROPIC_API_KEY")
+)
+MODEL = "claude-sonnet-5"
 def generate_answer(question: str, context: str) -> str:
     prompt = f"""
 You are an AI legal contract assistant.
@@ -19,16 +19,19 @@ If the answer is not in the excerpts, reply:
 
 Contract Excerpts:
 {context}
-
 Question:
 {question}
-
 Provide a concise answer and mention the relevant clause heading if possible.
 """
-
-    response = client.models.generate_content(
+    response = client.messages.create(
         model=MODEL,
-        contents=prompt,
+        max_tokens=1000,
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
     )
 
-    return response.text
+    return response.content[0].text

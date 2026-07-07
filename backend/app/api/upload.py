@@ -6,6 +6,8 @@ from app.models.schemas import Contract
 from app.api.parsing import parse_contract
 from app.api.chunking import chunk_contract
 from app.core.store_vector import embed_and_store_chunks
+from fastapi.responses import FileResponse
+from fastapi import HTTPException
 
 router = APIRouter()
 
@@ -40,3 +42,21 @@ async def upload_contract(file: UploadFile):
         "contract_id": contract_id,
         "status": "embedded"
     }
+
+
+
+@router.get("/contracts/{contract_id}/file")
+async def get_contract_file(contract_id: str):
+    db = SessionLocal()
+    try:
+        contract = db.query(Contract).filter(Contract.id == contract_id).first()
+        if not contract:
+            raise HTTPException(status_code=404, detail="Contract not found")
+        
+        file_path = f"data/raw/{contract.id}.{contract.file_type}"
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found on disk")
+            
+        return FileResponse(file_path)
+    finally:
+        db.close()

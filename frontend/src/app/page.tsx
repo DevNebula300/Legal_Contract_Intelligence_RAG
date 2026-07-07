@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   CloudUpload, MessageSquare, ShieldAlert, FileSearch,
   SplitSquareHorizontal, FileText, ShieldCheck, Search, ZoomIn, ZoomOut, Send, File
@@ -26,7 +26,54 @@ export default function Dashboard() {
     { text: "Hello, I am your Legal AI Assistant. How can I help you analyze the document today?", isUser: false }
   ]);
   const [loadingChat, setLoadingChat] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<"chat" | "risk">("chat");
+  const [riskReviewText, setRiskReviewText] = useState<string | null>(null);
+  const [loadingRisk, setLoadingRisk] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [chatHistory, loadingChat]);
+
+  const scrollToDropZone = () => {
+    dropZoneRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Small delay then open file picker after scroll
+    setTimeout(() => fileInputRef.current?.click(), 400);
+  };
+
+  const fetchRisk = async () => {
+    if (!currentContractId) return;
+    setLoadingRisk(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/risk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contract_id: currentContractId })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setRiskReviewText(data.risk_review);
+      } else {
+        setRiskReviewText("Error loading risk review.");
+      }
+    } catch (e) {
+      setRiskReviewText("Failed to connect to the backend.");
+    } finally {
+      setLoadingRisk(false);
+    }
+  };
+
+  useEffect(() => {
+    if ((activeView === "risk" || sidebarTab === "risk") && currentContractId && !riskReviewText && !loadingRisk) {
+      fetchRisk();
+    }
+  }, [activeView, currentContractId, riskReviewText, sidebarTab, loadingRisk]);
 
   const handleFileUpload = async (file: File) => {
     setUploading(true);
@@ -95,11 +142,17 @@ export default function Dashboard() {
       const data = await response.json();
 
       if (response.ok) {
+        let aiReply = "";
+        if (data.answer) {
+          aiReply += `<p>${data.answer.replace(/\n/g, '<br>')}</p><br>`;
+        }
         if (data.results && data.results.length > 0) {
-          let aiReply = `Here is what I found in the document:<br><br>`;
+          aiReply += `<strong>Citations:</strong><br>`;
           data.results.forEach((res: any, idx: number) => {
-            aiReply += `<strong>Citation ${idx + 1}</strong> (Page ${res.page_start || 'N/A'}): ${res.text}<br><br>`;
+            aiReply += `<em>Citation ${idx + 1}</em> (Page ${res.page_start || 'N/A'}): ${res.text}<br><br>`;
           });
+          setChatHistory([...newHistory, { text: aiReply, isUser: false, isHtml: true }]);
+        } else if (data.answer) {
           setChatHistory([...newHistory, { text: aiReply, isUser: false, isHtml: true }]);
         } else {
           setChatHistory([...newHistory, { text: "I couldn't find any relevant information regarding that question in the current contract.", isUser: false }]);
@@ -119,32 +172,13 @@ export default function Dashboard() {
     <div className="flex h-screen bg-gray-50 overflow-hidden font-sans">
       {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-gray-200 flex flex-col p-6">
-        <div className="flex items-center gap-2 text-blue-600 font-bold text-xl mb-10">
+        <div 
+          className="flex items-center gap-2 text-blue-600 font-bold text-xl mb-10 cursor-pointer" 
+          onClick={() => setActiveView("upload")}
+        >
           <ShieldCheck className="w-7 h-7" />
           <span>LegalIntelligence</span>
         </div>
-        <nav className="flex flex-col gap-2 flex-1">
-          {[
-            { id: "upload", icon: CloudUpload, label: "Upload" },
-            { id: "chat", icon: MessageSquare, label: "Chat" },
-            { id: "risk", icon: ShieldAlert, label: "Risk Review" },
-            { id: "precedents", icon: FileSearch, label: "Precedents" },
-            { id: "compare", icon: SplitSquareHorizontal, label: "Compare" },
-            { id: "reports", icon: FileText, label: "Reports" }
-          ].map(item => (
-            <button
-              key={item.id}
-              onClick={() => setActiveView(item.id)}
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${activeView === item.id
-                  ? "bg-blue-50 text-blue-700"
-                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                }`}
-            >
-              <item.icon className="w-5 h-5" />
-              {item.label}
-            </button>
-          ))}
-        </nav>
       </aside>
 
       {/* Main Content */}
@@ -159,7 +193,7 @@ export default function Dashboard() {
                 <p className="text-lg text-gray-600">
                   Upload contracts, identify legal risks, compare agreements, search precedents, and generate professional AI assisted reports all from one intuitive workspace.
                 </p>
-                <Button size="lg" onClick={triggerInput}>Upload Contract</Button>
+                <Button size="lg" onClick={scrollToDropZone}>Upload Contract</Button>
               </div>
               <div className="flex-1 flex justify-end">
                 <div className="rounded-2xl overflow-hidden shadow-lg border border-gray-200 max-w-sm">
@@ -189,24 +223,39 @@ export default function Dashboard() {
               ))}
             </section>
 
+            {/* Hidden file input lives OUTSIDE the drop zone to avoid click-bubble conflicts */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              accept=".pdf,.docx,.txt"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleFileUpload(e.target.files[0]);
+                  e.target.value = '';
+                }
+              }}
+            />
+
             <section className="space-y-6">
               <div
-                className="border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center bg-gray-50 hover:bg-blue-50 hover:border-blue-400 transition-colors cursor-pointer"
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={handleDrop}
-                onClick={triggerInput}
+                ref={dropZoneRef}
+                className="border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center bg-gray-50 hover:bg-blue-50 hover:border-blue-400 transition-colors"
+                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e); }}
               >
                 <CloudUpload className="w-12 h-12 text-blue-600 mx-auto mb-4" />
                 <h3 className="text-xl font-semibold text-gray-900 mb-2">Drag & Drop contract here</h3>
                 <p className="text-gray-500 mb-6">Supports PDF, DOCX, TXT</p>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  hidden
-                  accept=".pdf,.docx,.txt"
-                  onChange={(e) => e.target.files && handleFileUpload(e.target.files[0])}
-                />
-                <Button variant="outline">{uploading ? 'Uploading...' : 'Browse Files'}</Button>
+                <Button
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                >
+                  {uploading ? 'Uploading...' : 'Browse Files'}
+                </Button>
               </div>
 
               {recentUploads.length > 0 && (
@@ -220,6 +269,8 @@ export default function Dashboard() {
                         onClick={() => {
                           setCurrentContractId(doc.id);
                           setCurrentContractName(doc.name);
+                          setRiskReviewText(null);
+                          setChatHistory([{ text: "Hello, I am your Legal AI Assistant. How can I help you analyze the document today?", isUser: false }]);
                           setActiveView("chat");
                         }}
                       >
@@ -244,61 +295,102 @@ export default function Dashboard() {
             <div className="flex-[6] bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
               <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
                 <h3 className="font-semibold text-gray-900">{currentContractName || "No Document Selected"}</h3>
-                <div className="flex gap-2 text-gray-500">
-                  <button className="p-2 hover:bg-gray-200 rounded"><Search className="w-5 h-5" /></button>
-                  <button className="p-2 hover:bg-gray-200 rounded"><ZoomIn className="w-5 h-5" /></button>
-                  <button className="p-2 hover:bg-gray-200 rounded"><ZoomOut className="w-5 h-5" /></button>
-                </div>
               </div>
-              <div className="flex-1 bg-gray-100 flex items-center justify-center p-8 text-gray-400 flex-col gap-4">
-                <FileText className="w-16 h-16 opacity-50" />
-                <p>Upload or select a document to view</p>
+              <div className="flex-1 bg-gray-100 flex items-center justify-center text-gray-400 flex-col overflow-hidden">
+                {currentContractId ? (
+                  <iframe 
+                    src={`${API_BASE_URL}/contracts/${currentContractId}/file`} 
+                    className="w-full h-full border-none bg-white"
+                    title="Document Viewer"
+                  />
+                ) : (
+                  <>
+                    <FileText className="w-16 h-16 opacity-50 mb-4" />
+                    <p>Upload or select a document to view</p>
+                  </>
+                )}
               </div>
             </div>
 
-            {/* AI Chat */}
+            {/* Sidebar (Chat / Risk) */}
             <div className="flex-[4] bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
-              <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
-                <h3 className="font-semibold text-gray-900">AI Chat Assistant</h3>
-                <Badge className="bg-green-100 text-green-700 hover:bg-green-100">High Confidence</Badge>
+              <div className="flex border-b border-gray-200 bg-gray-50">
+                <button 
+                  className={`flex-1 p-4 font-semibold text-center border-b-2 transition-colors ${sidebarTab === 'chat' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  onClick={() => setSidebarTab('chat')}
+                >
+                  AI Chat
+                </button>
+                <button 
+                  className={`flex-1 p-4 font-semibold text-center border-b-2 transition-colors ${sidebarTab === 'risk' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  onClick={() => setSidebarTab('risk')}
+                >
+                  Risk Analysis
+                </button>
               </div>
 
-              <ScrollArea className="flex-1 p-4">
-                <div className="flex flex-col gap-4 pb-4">
-                  {chatHistory.map((msg, idx) => (
-                    <div key={idx} className={`max-w-[85%] p-3 rounded-xl text-sm ${msg.isUser
-                        ? 'bg-blue-600 text-white self-end rounded-br-sm'
-                        : 'bg-gray-100 text-gray-800 self-start rounded-bl-sm border border-gray-200'
-                      }`}>
-                      {msg.isHtml ? (
-                        <div dangerouslySetInnerHTML={{ __html: msg.text }} />
-                      ) : (
-                        msg.text
+              {sidebarTab === 'chat' && (
+                <>
+                  <div className="flex-1 p-4 overflow-y-auto min-h-0">
+                    <div className="flex flex-col gap-4 pb-4">
+                      {chatHistory.map((msg, idx) => (
+                        <div key={idx} className={`max-w-[85%] p-3 rounded-xl text-sm ${msg.isUser
+                            ? 'bg-blue-600 text-white self-end rounded-br-sm'
+                            : 'bg-gray-100 text-gray-800 self-start rounded-bl-sm border border-gray-200'
+                          }`}>
+                          {msg.isHtml ? (
+                            <div dangerouslySetInnerHTML={{ __html: msg.text }} />
+                          ) : (
+                            msg.text
+                          )}
+                        </div>
+                      ))}
+                      {loadingChat && (
+                        <div className="max-w-[85%] p-3 rounded-xl text-sm bg-gray-100 text-gray-800 self-start rounded-bl-sm border border-gray-200 animate-pulse">
+                          Thinking...
+                        </div>
+                      )}
+                      <div ref={messagesEndRef} />
+                    </div>
+                  </div>
+
+                  <div className="p-4 border-t border-gray-200 bg-white">
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Ask anything about the contract..."
+                        value={chatInput}
+                        onChange={e => setChatInput(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleSendMessage(chatInput)}
+                        className="rounded-full"
+                      />
+                      <Button size="icon" className="rounded-full bg-blue-600 hover:bg-blue-700" onClick={() => handleSendMessage(chatInput)}>
+                        <Send className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {sidebarTab === 'risk' && (
+                <div className="flex-1 p-6 overflow-y-auto min-h-0">
+                  {!currentContractId ? (
+                    <p className="text-gray-500 text-center mt-10">Please upload a contract first.</p>
+                  ) : loadingRisk ? (
+                    <div className="flex flex-col items-center justify-center mt-10 text-gray-500 animate-pulse">
+                      <ShieldAlert className="w-12 h-12 mb-4 opacity-50" />
+                      <p>Generating risk review...</p>
+                      <p className="text-xs mt-2">This may take a moment.</p>
+                    </div>
+                  ) : riskReviewText ? (
+                    <div className="flex flex-col gap-4">
+                      <div className="prose prose-sm prose-blue max-w-none text-gray-800" dangerouslySetInnerHTML={{ __html: riskReviewText }} />
+                      {(riskReviewText.includes("Failed to connect") || riskReviewText.includes("Error loading")) && (
+                        <Button variant="outline" onClick={fetchRisk} className="mt-4 self-center">Try Again</Button>
                       )}
                     </div>
-                  ))}
-                  {loadingChat && (
-                    <div className="max-w-[85%] p-3 rounded-xl text-sm bg-gray-100 text-gray-800 self-start rounded-bl-sm border border-gray-200 animate-pulse">
-                      Thinking...
-                    </div>
-                  )}
+                  ) : null}
                 </div>
-              </ScrollArea>
-
-              <div className="p-4 border-t border-gray-200 bg-white">
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="Ask anything about the contract..."
-                    value={chatInput}
-                    onChange={e => setChatInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleSendMessage(chatInput)}
-                    className="rounded-full"
-                  />
-                  <Button size="icon" className="rounded-full bg-blue-600 hover:bg-blue-700" onClick={() => handleSendMessage(chatInput)}>
-                    <Send className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
+              )}
             </div>
           </div>
         )}
@@ -306,44 +398,21 @@ export default function Dashboard() {
         {/* VIEW: RISK */}
         {activeView === "risk" && (
           <div className="animate-in fade-in duration-500 space-y-6">
-            <h2 className="text-2xl font-bold text-gray-900">Risk Review</h2>
-            <div className="grid grid-cols-3 gap-4">
-              <Card>
-                <CardHeader className="pb-2">
-                  <Badge className="bg-red-100 text-red-700 w-fit hover:bg-red-100">High Risk</Badge>
+            <h2 className="text-2xl font-bold text-gray-900">AI Risk Review</h2>
+            {!currentContractId ? (
+              <p className="text-gray-500">Please upload a contract first.</p>
+            ) : loadingRisk ? (
+              <p className="text-gray-500 animate-pulse">Generating risk review... this may take a moment.</p>
+            ) : (
+              <Card className="border-gray-200">
+                <CardHeader>
+                  <CardTitle className="text-lg">Risk Analysis</CardTitle>
                 </CardHeader>
-                <CardContent><span className="text-4xl font-bold">2</span></CardContent>
+                <CardContent>
+                  <div className="prose prose-blue max-w-none text-gray-800" dangerouslySetInnerHTML={{ __html: riskReviewText || "" }} />
+                </CardContent>
               </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <Badge className="bg-amber-100 text-amber-700 w-fit hover:bg-amber-100">Medium Risk</Badge>
-                </CardHeader>
-                <CardContent><span className="text-4xl font-bold">5</span></CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <Badge className="bg-green-100 text-green-700 w-fit hover:bg-green-100">Low Risk</Badge>
-                </CardHeader>
-                <CardContent><span className="text-4xl font-bold">12</span></CardContent>
-              </Card>
-            </div>
-
-            <Card className="border-red-200">
-              <CardHeader>
-                <div className="flex justify-between items-center">
-                  <CardTitle className="text-lg">Indemnification Clause</CardTitle>
-                  <Badge variant="destructive">High</Badge>
-                </div>
-                <CardDescription className="text-gray-900 mt-2">
-                  Uncapped liability found in Section 4.2. This exposes the company to unlimited damages.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="bg-slate-50 p-4 border-l-4 border-blue-600 rounded-r-lg text-sm text-gray-700">
-                  <strong>Suggested Revision:</strong> Cap liability to the total contract value paid in the preceding 12 months.
-                </div>
-              </CardContent>
-            </Card>
+            )}
           </div>
         )}
 

@@ -8,20 +8,29 @@ from app.models.schemas import Chunk
 from app.core.embeddings import embed_documents
 
 load_dotenv()
-
 qdrant_client = QdrantClient(url=os.getenv("QDRANT_URL", "http://localhost:6333"))
+COLLECTION_NAME = "contract_chunks"
+VECTOR_SIZE = 384 
+def ensure_collection():
+    existing = [c.name for c in qdrant_client.get_collections().collections]
+    if COLLECTION_NAME not in existing:
+        from qdrant_client.models import VectorParams, Distance
+        qdrant_client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+        )
+        print(f"Created Qdrant collection '{COLLECTION_NAME}'")
 
 def embed_and_store_chunks(contract_id: str):
+    ensure_collection()
     db = SessionLocal()
     try:
         chunks = db.query(Chunk).filter(Chunk.contract_id == contract_id).all()
         if not chunks:
             print(f"No chunks found for contract {contract_id}")
             return
-
         texts = [c.text for c in chunks]
         vectors = embed_documents(texts)
-
         points = [
             PointStruct(
                 id=str(uuid.uuid5(uuid.NAMESPACE_DNS, c.id)),
@@ -37,7 +46,6 @@ def embed_and_store_chunks(contract_id: str):
             )
             for c, vec in zip(chunks, vectors)
         ]
-
         qdrant_client.upsert(collection_name="contract_chunks", points=points)
         print(f"Embedded and stored {len(points)} chunks for contract {contract_id}")
     finally:

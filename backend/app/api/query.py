@@ -20,25 +20,34 @@ class QueryRequest(BaseModel):
 def query_contract(req: QueryRequest):
     q_vector = embed_query(req.question)
 
-    results = qdrant_client.search(
+    response = qdrant_client.query_points(
         collection_name="contract_chunks",
-        query_vector=q_vector,
+        query=q_vector,
         query_filter=Filter(
             must=[FieldCondition(key="contract_id", match=MatchValue(value=req.contract_id))]
         ),
         limit=req.top_k,
     )
+    results = response.points
+
+    formatted_results = [
+        {
+            "chunk_id": r.payload["chunk_id"],
+            "heading": r.payload["heading"],
+            "text": r.payload["text"],
+            "page_start": r.payload["page_start"],
+            "score": r.score,
+        }
+        for r in results
+    ]
+
+    context = "\n\n".join([f"Clause: {r['heading']}\nText: {r['text']}" for r in formatted_results])
+
+    from app.core.llm import generate_answer
+    answer = generate_answer(req.question, context)
 
     return {
         "question": req.question,
-        "results": [
-            {
-                "chunk_id": r.payload["chunk_id"],
-                "heading": r.payload["heading"],
-                "text": r.payload["text"],
-                "page_start": r.payload["page_start"],
-                "score": r.score,
-            }
-            for r in results
-        ]
-    }
+        "answer": answer,
+        "results": formatted_results
+    }

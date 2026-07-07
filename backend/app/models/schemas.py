@@ -10,7 +10,6 @@ class Contract(Base):
     upload_date = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="uploaded")
     page_count = Column(Integer, nullable=True)
-
 class Chunk(Base):
     __tablename__ = "chunks"
     id = Column(String, primary_key=True)
