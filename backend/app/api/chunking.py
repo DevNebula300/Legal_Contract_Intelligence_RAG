@@ -20,11 +20,20 @@ def is_heading(block: dict, avg_font_size: float) -> bool:
     for pattern in HEADING_PATTERNS:
         if pattern.match(text):
             return True
-    if block.get("font_size", 0) > avg_font_size * 1.15:
+    if len(text.split()) <= 2:
+        return False
+    if (
+        block.get("font_size", 0) >= avg_font_size * 1.30
+        and len(text.split()) <= 8
+        and len(text) <= 60
+    ):
         return True
-    if block.get("bold") and len(text) < 80:
+    if (
+        block.get("bold")
+        and len(text.split()) <= 8
+        and text == text.upper()
+    ):
         return True
-
     return False
 def compute_avg_font_size(blocks):
     font_sizes = [
@@ -47,6 +56,7 @@ def group_into_clauses(blocks, contract_id, avg_font_size):
         if is_heading(block, avg_font_size):
             if current["text"].strip():
                 clauses.append(current)
+
             current = {
                 "heading": block["text"].strip(),
                 "text": "",
@@ -101,6 +111,11 @@ def save_chunks(contract_id, clauses):
     db = SessionLocal()
     try:
         for i, clause in enumerate(clauses):
+            print("=" * 80)
+            print("HEADING:", clause["heading"])
+            print("TEXT:")
+            print(clause["text"])
+            print("=" * 80)
             chunk = Chunk(
                 id=f"{contract_id}_chunk_{i}",
                 contract_id=contract_id,

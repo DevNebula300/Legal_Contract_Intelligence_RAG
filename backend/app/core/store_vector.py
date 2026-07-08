@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from app.core.db import SessionLocal
 from app.models.schemas import Chunk
 from app.core.embeddings import embed_documents
-
 load_dotenv()
 qdrant_client = QdrantClient(url=os.getenv("QDRANT_URL", "http://localhost:6333"))
 COLLECTION_NAME = "contract_chunks"

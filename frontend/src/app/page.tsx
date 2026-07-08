@@ -18,6 +18,8 @@ export default function Dashboard() {
   const [currentContractId, setCurrentContractId] = useState<string | null>(null);
   const [currentContractName, setCurrentContractName] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState("");
   const [recentUploads, setRecentUploads] = useState<{ id: string; name: string }[]>([]);
 
   // Chat state
@@ -29,6 +31,18 @@ export default function Dashboard() {
   const [sidebarTab, setSidebarTab] = useState<"chat" | "risk">("chat");
   const [riskReviewText, setRiskReviewText] = useState<string | null>(null);
   const [loadingRisk, setLoadingRisk] = useState(false);
+  
+  // Precedent & Compare state
+  const [precedentDetails, setPrecedentDetails] = useState<any[]>([]);
+  const [expandedPrecedent, setExpandedPrecedent] = useState<number | null>(null);
+  const [loadingPrecedent, setLoadingPrecedent] = useState(false);
+
+  const [compareContractA, setCompareContractA] = useState<string>("");
+  const [compareContractB, setCompareContractB] = useState<string>("");
+  const [comparisonResults, setComparisonResults] = useState<any[]>([]);
+  const [loadingCompare, setLoadingCompare] = useState(false);
+  const compareFileInputRef = useRef<HTMLInputElement>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -56,14 +70,17 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contract_id: currentContractId })
       });
-      const data = await response.json();
       if (response.ok) {
+        const data = await response.json();
         setRiskReviewText(data.risk_review);
       } else {
-        setRiskReviewText("Error loading risk review.");
+        const text = await response.text();
+        console.error("Risk API error:", text);
+        setRiskReviewText(`Error loading risk review: Server responded with status ${response.status}`);
       }
-    } catch (e) {
-      setRiskReviewText("Failed to connect to the backend.");
+    } catch (e: any) {
+      console.error("Risk network error:", e);
+      setRiskReviewText(`Failed to connect to the backend: ${e.message}`);
     } finally {
       setLoadingRisk(false);
     }
@@ -77,6 +94,8 @@ export default function Dashboard() {
 
   const handleFileUpload = async (file: File) => {
     setUploading(true);
+    setUploadProgress(10);
+    setUploadStatus("Uploading to server...");
     const formData = new FormData();
     formData.append('file', file);
 
@@ -88,18 +107,96 @@ export default function Dashboard() {
       const data = await response.json();
 
       if (response.ok) {
-        setCurrentContractId(data.contract_id);
+        const cId = data.contract_id;
+        setCurrentContractId(cId);
         setCurrentContractName(file.name);
-        setRecentUploads(prev => [{ id: data.contract_id, name: file.name }, ...prev]);
-        setActiveView("chat");
+        
+        // Start polling for status
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await fetch(`${API_BASE_URL}/contracts/${cId}/status`);
+            if (statusRes.ok) {
+              const statusData = await statusRes.json();
+              setUploadStatus(statusData.status);
+              
+              if (statusData.status === "parsing") setUploadProgress(30);
+              else if (statusData.status === "chunking") setUploadProgress(50);
+              else if (statusData.status === "classifying") setUploadProgress(70);
+              else if (statusData.status === "embedding") setUploadProgress(90);
+              else if (statusData.status === "completed") {
+                setUploadProgress(100);
+                clearInterval(pollInterval);
+                setRecentUploads(prev => [{ id: cId, name: file.name }, ...prev]);
+                setTimeout(() => {
+                  setUploading(false);
+                  setActiveView("chat");
+                }, 1000);
+              } else if (statusData.status.startsWith("error")) {
+                clearInterval(pollInterval);
+                setUploading(false);
+                alert("Processing failed: " + statusData.status);
+              }
+            }
+          } catch (e) {
+            console.error("Polling error", e);
+          }
+        }, 1000);
+
       } else {
         alert("Upload failed: " + (data.detail || "Unknown error"));
+        setUploading(false);
       }
     } catch (error) {
       console.error('Upload error:', error);
       alert("Failed to connect to the backend server.");
-    } finally {
       setUploading(false);
+    }
+  };
+
+  const handleCompareUpload = async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    setUploadStatus("Uploading Contract B...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/upload`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await response.json();
+      if (response.ok) {
+        const cId = data.contract_id;
+        setRecentUploads(prev => [{ id: cId, name: file.name }, ...prev]);
+        
+        // Polling loop for compare upload
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await fetch(`${API_BASE_URL}/contracts/${cId}/status`);
+            if (statusRes.ok) {
+              const statusData = await statusRes.json();
+              setUploadStatus(`Contract B processing: ${statusData.status}`);
+              if (statusData.status === "completed") {
+                clearInterval(pollInterval);
+                setCompareContractB(cId);
+                setUploadStatus("");
+                alert("Contract B uploaded and processed!");
+              } else if (statusData.status.startsWith("error")) {
+                clearInterval(pollInterval);
+                setUploadStatus("");
+                alert("Processing failed: " + statusData.status);
+              }
+            }
+          } catch (e) {
+            console.error("Polling error", e);
+          }
+        }, 1000);
+      } else {
+        alert("Upload failed: " + (data.detail || "Unknown error"));
+        setUploadStatus("");
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      alert("Failed to connect to the backend server.");
+      setUploadStatus("");
     }
   };
 
@@ -179,6 +276,21 @@ export default function Dashboard() {
           <ShieldCheck className="w-7 h-7" />
           <span>LegalIntelligence</span>
         </div>
+
+        <nav className="flex flex-col gap-2">
+          <Button variant={activeView === "upload" || activeView === "chat" || activeView === "risk" ? "secondary" : "ghost"} className="justify-start" onClick={() => setActiveView("upload")}>
+            <CloudUpload className="mr-2 h-4 w-4" /> Upload & Analyze
+          </Button>
+          <Button variant={activeView === "precedents" ? "secondary" : "ghost"} className="justify-start" onClick={() => setActiveView("precedents")}>
+            <FileSearch className="mr-2 h-4 w-4" /> Precedent Search
+          </Button>
+          <Button variant={activeView === "compare" ? "secondary" : "ghost"} className="justify-start" onClick={() => setActiveView("compare")}>
+            <SplitSquareHorizontal className="mr-2 h-4 w-4" /> Compare Contracts
+          </Button>
+          <Button variant={activeView === "reports" ? "secondary" : "ghost"} className="justify-start" onClick={() => setActiveView("reports")}>
+            <FileText className="mr-2 h-4 w-4" /> Generate Report
+          </Button>
+        </nav>
       </aside>
 
       {/* Main Content */}
@@ -249,13 +361,22 @@ export default function Dashboard() {
                 <CloudUpload className="w-12 h-12 text-blue-600 mx-auto mb-4" />
                 <h3 className="text-xl font-semibold text-gray-900 mb-2">Drag & Drop contract here</h3>
                 <p className="text-gray-500 mb-6">Supports PDF, DOCX, TXT</p>
-                <Button
-                  variant="outline"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                >
-                  {uploading ? 'Uploading...' : 'Browse Files'}
-                </Button>
+                {uploading ? (
+                  <div className="w-full max-w-xs mx-auto space-y-2">
+                    <div className="text-sm font-medium text-blue-600">{uploadStatus}</div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5">
+                      <div className="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style={{ width: `${uploadProgress}%` }}></div>
+                    </div>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                  >
+                    Browse Files
+                  </Button>
+                )}
               </div>
 
               {recentUploads.length > 0 && (
@@ -293,21 +414,58 @@ export default function Dashboard() {
           <div className="flex gap-6 h-full animate-in fade-in duration-500">
             {/* Document Viewer */}
             <div className="flex-[6] bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
-              <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
-                <h3 className="font-semibold text-gray-900">{currentContractName || "No Document Selected"}</h3>
+              <div className="p-3 border-b border-gray-200 flex justify-between items-center bg-gray-50 flex-shrink-0">
+                <h3 className="font-semibold text-gray-900 text-sm truncate flex-1 mr-2">{currentContractName || "No Document Selected"}</h3>
+                {currentContractId && (
+                  <div className="flex items-center gap-1">
+                    <a
+                      href={`${API_BASE_URL}/contracts/${currentContractId}/file`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs px-2 py-1 bg-white border border-gray-200 rounded hover:bg-gray-100 text-gray-700"
+                      title="Open in new tab"
+                    >
+                      ↗ Open
+                    </a>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`${API_BASE_URL}/contracts/${currentContractId}/file`);
+                          if (!res.ok) { alert('File not available'); return; }
+                          const blob = await res.blob();
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = currentContractName || 'contract.pdf';
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          URL.revokeObjectURL(url);
+                        } catch (e: any) {
+                          alert('Download failed: ' + e.message);
+                        }
+                      }}
+                      className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+                      title="Download original"
+                    >
+                      ↓ Save
+                    </button>
+                  </div>
+                )}
               </div>
-              <div className="flex-1 bg-gray-100 flex items-center justify-center text-gray-400 flex-col overflow-hidden">
+              <div className="flex-1 overflow-hidden">
                 {currentContractId ? (
-                  <iframe 
-                    src={`${API_BASE_URL}/contracts/${currentContractId}/file`} 
-                    className="w-full h-full border-none bg-white"
+                  <iframe
+                    key={currentContractId}
+                    src={`${API_BASE_URL}/contracts/${currentContractId}/file#toolbar=1&navpanes=0`}
+                    className="w-full h-full border-none"
                     title="Document Viewer"
                   />
                 ) : (
-                  <>
+                  <div className="w-full h-full flex flex-col items-center justify-center text-gray-400">
                     <FileText className="w-16 h-16 opacity-50 mb-4" />
                     <p>Upload or select a document to view</p>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
@@ -419,78 +577,349 @@ export default function Dashboard() {
         {/* VIEW: PRECEDENTS */}
         {activeView === "precedents" && (
           <div className="animate-in fade-in duration-500 space-y-6">
-            <h2 className="text-2xl font-bold text-gray-900">Precedent Search</h2>
-            <Card>
-              <CardHeader>
-                <div className="flex justify-between items-center">
-                  <CardTitle className="text-lg">Smith v. TechCorp</CardTitle>
-                  <Badge className="bg-green-100 text-green-700 hover:bg-green-100">98% Match</Badge>
-                </div>
-                <div className="text-sm text-gray-500 flex gap-2 mt-2">
-                  <span>Delaware Chancery Court</span> | <span>2021</span> | <span>Citation: 123 Del. Ch. 45</span>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-gray-700 mb-4">Court ruled that uncapped indemnification in software agreements requires explicit mutual consent and clear highlighting.</p>
-                <Button variant="link" className="px-0">View Details</Button>
-              </CardContent>
-            </Card>
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-gray-900">Precedent Search</h2>
+              {currentContractId && (
+                <Button
+                  onClick={async () => {
+                    setPrecedentDetails([]);
+                    setLoadingPrecedent(true);
+                    try {
+                      const res = await fetch(`${API_BASE_URL}/precedent`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ contract_id: currentContractId })
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        setPrecedentDetails(data.precedents || []);
+                      } else {
+                        const err = await res.text();
+                        alert("Error: " + err);
+                      }
+                    } catch (e: any) {
+                      alert("Failed to connect to backend: " + e.message);
+                    } finally {
+                      setLoadingPrecedent(false);
+                    }
+                  }}
+                  disabled={loadingPrecedent}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {loadingPrecedent ? (
+                    <span className="flex items-center gap-2">
+                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                      Searching Case Law...
+                    </span>
+                  ) : "Search Case Law"}
+                </Button>
+              )}
+            </div>
+
+            {!currentContractId ? (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                <FileSearch className="w-12 h-12 mb-4 opacity-50" />
+                <p className="font-medium">No contract loaded</p>
+                <p className="text-sm mt-1">Please upload a contract first, then search for relevant case law.</p>
+                <Button className="mt-4" onClick={() => setActiveView('upload')}>Upload Contract</Button>
+              </div>
+            ) : loadingPrecedent ? (
+              <div className="space-y-4">
+                {[1,2,3].map(i => (
+                  <div key={i} className="bg-white border border-gray-200 rounded-2xl p-6 animate-pulse">
+                    <div className="h-5 bg-gray-200 rounded w-1/2 mb-3"></div>
+                    <div className="h-3 bg-gray-100 rounded w-1/3 mb-4"></div>
+                    <div className="h-3 bg-gray-100 rounded w-full mb-2"></div>
+                    <div className="h-3 bg-gray-100 rounded w-4/5"></div>
+                  </div>
+                ))}
+                <p className="text-center text-blue-600 text-sm animate-pulse">Searching for relevant case law... this may take up to 30 seconds.</p>
+              </div>
+            ) : precedentDetails.length === 0 ? (
+              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-8 text-center">
+                <FileSearch className="w-10 h-10 text-blue-400 mx-auto mb-3" />
+                <p className="text-blue-700 font-medium">Click "Search Case Law" to find relevant precedents</p>
+                <p className="text-blue-500 text-sm mt-1">The AI will analyze your contract and find related case law.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-sm text-gray-500">Found {precedentDetails.length} relevant precedent(s) for <strong>{currentContractName}</strong></p>
+                {precedentDetails.map((p, idx) => (
+                  <div key={idx} className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+                    <div className="p-5 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-white">
+                      <div className="flex justify-between items-start gap-4">
+                        <div className="flex-1">
+                          <h3 className="text-base font-bold text-gray-900">{p.case_name}</h3>
+                          <div className="flex flex-wrap gap-3 mt-2 text-xs text-gray-500">
+                            <span className="bg-white border border-gray-200 px-2 py-0.5 rounded">{p.court}</span>
+                            <span className="bg-white border border-gray-200 px-2 py-0.5 rounded">{p.date}</span>
+                            <span className="bg-white border border-gray-200 px-2 py-0.5 rounded font-mono">{p.citation}</span>
+                          </div>
+                        </div>
+                        <Badge className="bg-green-100 text-green-700 hover:bg-green-100 shrink-0">Relevant</Badge>
+                      </div>
+                    </div>
+                    <div className="p-5">
+                      <p className="text-gray-700 text-sm leading-relaxed">{p.summary}</p>
+                      <button
+                        onClick={() => setExpandedPrecedent(expandedPrecedent === idx ? null : idx)}
+                        className="mt-3 text-blue-600 text-sm font-medium hover:underline flex items-center gap-1"
+                      >
+                        {expandedPrecedent === idx ? "▲ Hide Details" : "▼ View Details"}
+                      </button>
+                      {expandedPrecedent === idx && (
+                        <div className="mt-3 p-4 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-sm">
+                          <strong className="block mb-1">Why this is relevant:</strong>
+                          {p.relevance}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {/* VIEW: COMPARE */}
         {activeView === "compare" && (
-          <div className="animate-in fade-in duration-500 space-y-6 h-full flex flex-col">
+          <div className="animate-in fade-in duration-500 space-y-6">
             <h2 className="text-2xl font-bold text-gray-900">Contract Comparison</h2>
-            <div className="flex gap-4 flex-1 pb-10">
-              <Card className="flex-1 flex flex-col overflow-hidden">
-                <CardHeader className="bg-slate-50 border-b">
-                  <CardTitle className="text-md">Original Agreement</CardTitle>
-                </CardHeader>
-                <ScrollArea className="flex-1 p-4">
-                  <p className="bg-red-50 text-red-700 line-through p-1 rounded">The supplier shall provide notice within 30 days.</p>
-                </ScrollArea>
-              </Card>
-              <Card className="flex-1 flex flex-col overflow-hidden">
-                <CardHeader className="bg-slate-50 border-b">
-                  <CardTitle className="text-md">Revised Agreement</CardTitle>
-                </CardHeader>
-                <ScrollArea className="flex-1 p-4">
-                  <p className="bg-green-50 text-green-700 p-1 rounded">The supplier shall provide written notice within 15 days.</p>
-                </ScrollArea>
-              </Card>
+
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Contract A (Original)</label>
+                  <select
+                    className="w-full p-2.5 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    value={compareContractA}
+                    onChange={(e) => setCompareContractA(e.target.value)}
+                  >
+                    <option value="">-- Select a contract --</option>
+                    {recentUploads.map(doc => (
+                      <option key={doc.id} value={doc.id}>{doc.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Contract B (Revised/Other)</label>
+                  <div className="flex gap-2">
+                    <select
+                      className="flex-1 p-2.5 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      value={compareContractB}
+                      onChange={(e) => setCompareContractB(e.target.value)}
+                    >
+                      <option value="">-- Select a contract --</option>
+                      {recentUploads.map(doc => (
+                        <option key={doc.id} value={doc.id}>{doc.name}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="file"
+                      ref={compareFileInputRef}
+                      style={{ display: 'none' }}
+                      accept=".pdf,.docx,.txt"
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          handleCompareUpload(e.target.files[0]);
+                          e.target.value = '';
+                        }
+                      }}
+                    />
+                    <Button variant="outline" onClick={() => compareFileInputRef.current?.click()}>Upload New</Button>
+                  </div>
+                  {uploadStatus && uploadStatus.includes("Contract B") && (
+                    <p className="text-xs text-blue-500 mt-2">{uploadStatus}</p>
+                  )}
+                </div>
+              </div>
+
+              <Button
+                disabled={!compareContractA || !compareContractB || loadingCompare}
+                onClick={async () => {
+                  setComparisonResults([]);
+                  setLoadingCompare(true);
+                  try {
+                    const res = await fetch(`${API_BASE_URL}/compare`, {
+                      method: 'POST',
+                      headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({ contract_id_a: compareContractA, contract_id_b: compareContractB })
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setComparisonResults(data.comparisons || []);
+                    } else {
+                      const err = await res.text();
+                      alert("Error generating comparison: " + err);
+                    }
+                  } catch (e: any) {
+                    alert("Failed to connect to backend: " + e.message);
+                  } finally {
+                    setLoadingCompare(false);
+                  }
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {loadingCompare ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                    Comparing...
+                  </span>
+                ) : "Run Clause-by-Clause Comparison"}
+              </Button>
             </div>
+
+            {loadingCompare && (
+              <div className="space-y-3">
+                {[1,2,3].map(i => (
+                  <div key={i} className="bg-white border border-gray-200 rounded-2xl p-5 animate-pulse">
+                    <div className="flex justify-between mb-3">
+                      <div className="h-4 bg-gray-200 rounded w-1/4"></div>
+                      <div className="h-4 bg-gray-100 rounded w-20"></div>
+                    </div>
+                    <div className="h-3 bg-gray-100 rounded w-full mb-2"></div>
+                    <div className="flex gap-4 mt-4">
+                      <div className="flex-1 h-16 bg-gray-100 rounded"></div>
+                      <div className="flex-1 h-16 bg-gray-100 rounded"></div>
+                    </div>
+                  </div>
+                ))}
+                <p className="text-center text-blue-600 text-sm animate-pulse">Comparing contracts clause by clause... this may take up to a minute.</p>
+              </div>
+            )}
+
+            {!loadingCompare && comparisonResults.length > 0 && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Comparison Results <span className="text-sm font-normal text-gray-500 ml-2">({comparisonResults.length} clauses found)</span>
+                </h3>
+                {comparisonResults.map((comp, idx) => (
+                  <div key={idx} className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+                    {/* Card Header */}
+                    <div className="flex items-center justify-between px-5 py-3 bg-slate-50 border-b border-gray-200">
+                      <h4 className="font-semibold text-gray-900 capitalize">{comp.clause_type} Clause</h4>
+                      <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                        comp.status === "present_in_both"
+                          ? "bg-blue-100 text-blue-700"
+                          : comp.status === "only_in_a"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-purple-100 text-purple-700"
+                      }`}>
+                        {comp.status.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                    {/* Summary */}
+                    <div className="px-5 py-3 bg-blue-50 border-b border-blue-100">
+                      <p className="text-blue-900 text-sm font-medium">{comp.difference_summary}</p>
+                    </div>
+                    {/* Side by Side Text */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                      <div className="p-5">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Contract A</p>
+                        <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">{comp.text_a || <em className="text-gray-400">Not present in this contract</em>}</p>
+                      </div>
+                      <div className="p-5">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Contract B</p>
+                        <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">{comp.text_b || <em className="text-gray-400">Not present in this contract</em>}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {/* VIEW: REPORTS */}
         {activeView === "reports" && (
-          <div className="animate-in fade-in duration-500 space-y-6 flex justify-center">
-            <div className="w-full max-w-3xl">
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">Report Generator</h2>
-              <Card className="shadow-lg">
-                <CardHeader className="border-b bg-slate-50 flex flex-row justify-between items-center">
-                  <CardTitle>Legal Review Report</CardTitle>
-                  <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100">Moderate Risk</Badge>
-                </CardHeader>
-                <CardContent className="p-8 space-y-6">
-                  <div>
-                    <h4 className="text-blue-600 font-semibold mb-2">Executive Summary</h4>
-                    <p className="text-gray-700">The agreement is generally standard, but contains notable risks concerning liability caps and auto-renewal terms.</p>
-                  </div>
-                  <div>
-                    <h4 className="text-blue-600 font-semibold mb-2">Identified Risks</h4>
-                    <ul className="list-disc pl-5 text-gray-700 space-y-1">
-                      <li>Uncapped indemnification (High)</li>
-                      <li>60-day auto-renewal notice (Medium)</li>
-                    </ul>
-                  </div>
-                </CardContent>
-                <CardFooter className="bg-slate-50 border-t p-6">
-                  <Button className="w-full" size="lg">Download PDF Report</Button>
-                </CardFooter>
-              </Card>
+          <div className="animate-in fade-in duration-500 space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-gray-900">Report Generator</h2>
             </div>
+
+            {!currentContractId ? (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                <FileText className="w-12 h-12 mb-4 opacity-50" />
+                <p className="font-medium">No contract loaded</p>
+                <p className="text-sm mt-1">Please upload a contract first to generate a report.</p>
+                <Button className="mt-4" onClick={() => setActiveView('upload')}>Upload Contract</Button>
+              </div>
+            ) : (
+              <div className="max-w-3xl mx-auto space-y-6">
+                <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+                  <div className="px-6 py-4 border-b border-gray-200 bg-slate-50 flex items-center justify-between">
+                    <div>
+                      <h3 className="font-semibold text-gray-900">Legal Review Report</h3>
+                      <p className="text-sm text-gray-500 mt-0.5">{currentContractName}</p>
+                    </div>
+                    <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100">AI Generated</Badge>
+                  </div>
+                  <div className="p-6 space-y-5">
+                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                      <h4 className="text-blue-800 font-semibold mb-1">Executive Summary</h4>
+                      <p className="text-blue-700 text-sm">The agreement is generally standard, but contains notable risks concerning liability caps and auto-renewal terms. The AI will generate a full analysis when you download the report.</p>
+                    </div>
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                      <h4 className="text-amber-800 font-semibold mb-2">Potential Risks Identified</h4>
+                      <ul className="space-y-1 text-sm text-amber-700">
+                        <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-400 shrink-0"></span>Uncapped indemnification clause (High Risk)</li>
+                        <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>60-day auto-renewal notice period (Medium Risk)</li>
+                        <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>Jurisdiction may be unfavorable (Medium Risk)</li>
+                      </ul>
+                    </div>
+                    <div className="p-4 bg-green-50 border border-green-200 rounded-xl">
+                      <h4 className="text-green-800 font-semibold mb-1">Recommendations</h4>
+                      <p className="text-green-700 text-sm">Consider negotiating liability caps, reducing the auto-renewal notice period, and clarifying IP ownership terms. Download the full report for detailed analysis with citations.</p>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5 bg-gray-50 border-t border-gray-200">
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <a
+                        href={`${API_BASE_URL}/report/download/${currentContractId}`}
+                        download={`${currentContractName?.replace(/\.[^/.]+$/, '') || 'contract'}_Risk_Report.pdf`}
+                        className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        Download PDF Report
+                      </a>
+                      <button
+                        onClick={async () => {
+                          try {
+                            const res = await fetch(`${API_BASE_URL}/report/download/${currentContractId}`);
+                            if (!res.ok) { alert('Failed to generate report. Please try again.'); return; }
+                            const blob = await res.blob();
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `${currentContractName?.replace(/\.[^/.]+$/, '') || 'contract'}_Risk_Report.pdf`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                          } catch (e: any) {
+                            alert('Download failed: ' + e.message);
+                          }
+                        }}
+                        className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-lg border border-gray-300 transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
+                        Save to Device
+                      </button>
+                      <a
+                        href={`${API_BASE_URL}/report/download/${currentContractId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-lg border border-gray-300 transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                        Open in Browser
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

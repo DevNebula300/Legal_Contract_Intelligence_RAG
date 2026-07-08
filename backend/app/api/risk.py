@@ -29,6 +29,12 @@ def generate_risk_review(req: RiskRequest):
     )
     results = response.points
 
+    if not results:
+        return {
+            "contract_id": req.contract_id,
+            "risk_review": "<p>No analyzable text was found in the database for this contract. It may be too short or still processing. Please try again in a moment.</p>"
+        }
+
     context = "\n\n".join([f"Clause: {r.payload['heading']}\nText: {r.payload['text']}" for r in results])
     
     prompt = "Please perform a risk review of this contract based on the provided clauses. Identify high, medium, and low risks. Format your response clearly using HTML tags like <h3>, <strong>, <ul>, and <li>."

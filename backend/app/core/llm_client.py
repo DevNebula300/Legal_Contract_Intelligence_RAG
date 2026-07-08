@@ -2,7 +2,6 @@ import os
 import json
 from anthropic import Anthropic
 from dotenv import load_dotenv
-
 load_dotenv()
 api_key = os.getenv("ANTHROPIC_API_KEY")
 if not api_key:
@@ -20,8 +19,10 @@ def call_llm(prompt: str) -> str:
             }
         ]
     )
-
-    return response.content[0].text
+    for block in response.content:
+        if hasattr(block, "text"):
+            return block.text
+    raise ValueError("No text block found in Claude response.")
 def parse_json_response(text: str) -> dict:
     text = text.strip()
     if text.startswith("```"):
