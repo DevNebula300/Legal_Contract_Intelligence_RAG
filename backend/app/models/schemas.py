@@ -20,3 +20,10 @@ class Chunk(Base):
     page_end = Column(Integer)
     char_offset = Column(Integer)
     clause_type = Column(String, nullable=True)
+
+class PrecedentCache(Base):
+    __tablename__ = "precedent_cache"
+    id = Column(String, primary_key=True)
+    query = Column(String)
+    results_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)

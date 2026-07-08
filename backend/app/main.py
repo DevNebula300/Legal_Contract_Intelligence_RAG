@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.db import Base, engine
-from app.api import upload, query, risk
+from app.api import upload, query, risk, report, compare, precedent
 
 Base.metadata.create_all(bind=engine)
 
@@ -17,6 +17,9 @@ app.add_middleware(
 app.include_router(upload.router)
 app.include_router(query.router)
 app.include_router(risk.router)
+app.include_router(report.router)
+app.include_router(compare.router)
+app.include_router(precedent.router)
 @app.get("/health")
 def health():
     return {"status": "ok"}

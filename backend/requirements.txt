@@ -10,3 +10,7 @@ python-dotenv
 openai
 anthropic
 sentence-transformers
+httpx
+langgraph
+langchain
+langchain-core
