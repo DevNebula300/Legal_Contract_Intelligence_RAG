@@ -10,6 +10,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import ReactMarkdown from "react-markdown";
+import PdfViewer from "@/components/PdfViewer";
 
 const API_BASE_URL = 'http://localhost:8000';
 
@@ -42,6 +44,10 @@ export default function Dashboard() {
   const [comparisonResults, setComparisonResults] = useState<any[]>([]);
   const [loadingCompare, setLoadingCompare] = useState(false);
   const compareFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [reportContent, setReportContent] = useState<string | null>(null);
+  const [loadingReport, setLoadingReport] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
@@ -110,15 +116,16 @@ export default function Dashboard() {
         const cId = data.contract_id;
         setCurrentContractId(cId);
         setCurrentContractName(file.name);
-        
-        // Start polling for status
+        setPdfBlobUrl(null);
+        setReportContent(null);
+
         const pollInterval = setInterval(async () => {
           try {
             const statusRes = await fetch(`${API_BASE_URL}/contracts/${cId}/status`);
             if (statusRes.ok) {
               const statusData = await statusRes.json();
               setUploadStatus(statusData.status);
-              
+
               if (statusData.status === "parsing") setUploadProgress(30);
               else if (statusData.status === "chunking") setUploadProgress(50);
               else if (statusData.status === "classifying") setUploadProgress(70);
@@ -127,6 +134,8 @@ export default function Dashboard() {
                 setUploadProgress(100);
                 clearInterval(pollInterval);
                 setRecentUploads(prev => [{ id: cId, name: file.name }, ...prev]);
+                // Use same-origin proxy route — avoids CORS block in pdf.js worker
+                setPdfBlobUrl(`/api/pdf/${cId}`);
                 setTimeout(() => {
                   setUploading(false);
                   setActiveView("chat");
@@ -391,7 +400,10 @@ export default function Dashboard() {
                           setCurrentContractId(doc.id);
                           setCurrentContractName(doc.name);
                           setRiskReviewText(null);
+                          setReportContent(null);
                           setChatHistory([{ text: "Hello, I am your Legal AI Assistant. How can I help you analyze the document today?", isUser: false }]);
+                          // Use same-origin proxy — avoids CORS block in pdf.js worker
+                          setPdfBlobUrl(`/api/pdf/${doc.id}`);
                           setActiveView("chat");
                         }}
                       >
@@ -409,57 +421,15 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* VIEW: CHAT */}
         {activeView === "chat" && (
           <div className="flex gap-6 h-full animate-in fade-in duration-500">
-            {/* Document Viewer */}
             <div className="flex-[6] bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
-              <div className="p-3 border-b border-gray-200 flex justify-between items-center bg-gray-50 flex-shrink-0">
-                <h3 className="font-semibold text-gray-900 text-sm truncate flex-1 mr-2">{currentContractName || "No Document Selected"}</h3>
-                {currentContractId && (
-                  <div className="flex items-center gap-1">
-                    <a
-                      href={`${API_BASE_URL}/contracts/${currentContractId}/file`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs px-2 py-1 bg-white border border-gray-200 rounded hover:bg-gray-100 text-gray-700"
-                      title="Open in new tab"
-                    >
-                      ↗ Open
-                    </a>
-                    <button
-                      onClick={async () => {
-                        try {
-                          const res = await fetch(`${API_BASE_URL}/contracts/${currentContractId}/file`);
-                          if (!res.ok) { alert('File not available'); return; }
-                          const blob = await res.blob();
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement('a');
-                          a.href = url;
-                          a.download = currentContractName || 'contract.pdf';
-                          document.body.appendChild(a);
-                          a.click();
-                          document.body.removeChild(a);
-                          URL.revokeObjectURL(url);
-                        } catch (e: any) {
-                          alert('Download failed: ' + e.message);
-                        }
-                      }}
-                      className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-                      title="Download original"
-                    >
-                      ↓ Save
-                    </button>
-                  </div>
-                )}
-              </div>
               <div className="flex-1 overflow-hidden">
-                {currentContractId ? (
-                  <iframe
-                    key={currentContractId}
-                    src={`${API_BASE_URL}/contracts/${currentContractId}/file#toolbar=1&navpanes=0`}
-                    className="w-full h-full border-none"
-                    title="Document Viewer"
+                {pdfBlobUrl ? (
+                  <PdfViewer
+                    key={pdfBlobUrl}
+                    url={pdfBlobUrl}
+                    fileName={currentContractName || "document.pdf"}
                   />
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center text-gray-400">
@@ -831,7 +801,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* VIEW: REPORTS */}
         {activeView === "reports" && (
           <div className="animate-in fade-in duration-500 space-y-6">
             <div className="flex items-center justify-between">
@@ -846,7 +815,7 @@ export default function Dashboard() {
                 <Button className="mt-4" onClick={() => setActiveView('upload')}>Upload Contract</Button>
               </div>
             ) : (
-              <div className="max-w-3xl mx-auto space-y-6">
+              <div className="max-w-4xl mx-auto space-y-6">
                 <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
                   <div className="px-6 py-4 border-b border-gray-200 bg-slate-50 flex items-center justify-between">
                     <div>
@@ -855,67 +824,61 @@ export default function Dashboard() {
                     </div>
                     <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100">AI Generated</Badge>
                   </div>
-                  <div className="p-6 space-y-5">
-                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
-                      <h4 className="text-blue-800 font-semibold mb-1">Executive Summary</h4>
-                      <p className="text-blue-700 text-sm">The agreement is generally standard, but contains notable risks concerning liability caps and auto-renewal terms. The AI will generate a full analysis when you download the report.</p>
-                    </div>
-                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
-                      <h4 className="text-amber-800 font-semibold mb-2">Potential Risks Identified</h4>
-                      <ul className="space-y-1 text-sm text-amber-700">
-                        <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-400 shrink-0"></span>Uncapped indemnification clause (High Risk)</li>
-                        <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>60-day auto-renewal notice period (Medium Risk)</li>
-                        <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>Jurisdiction may be unfavorable (Medium Risk)</li>
-                      </ul>
-                    </div>
-                    <div className="p-4 bg-green-50 border border-green-200 rounded-xl">
-                      <h4 className="text-green-800 font-semibold mb-1">Recommendations</h4>
-                      <p className="text-green-700 text-sm">Consider negotiating liability caps, reducing the auto-renewal notice period, and clarifying IP ownership terms. Download the full report for detailed analysis with citations.</p>
-                    </div>
-                  </div>
-                  <div className="px-6 py-5 bg-gray-50 border-t border-gray-200">
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      <a
-                        href={`${API_BASE_URL}/report/download/${currentContractId}`}
-                        download={`${currentContractName?.replace(/\.[^/.]+$/, '') || 'contract'}_Risk_Report.pdf`}
-                        className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                        Download PDF Report
-                      </a>
-                      <button
-                        onClick={async () => {
-                          try {
-                            const res = await fetch(`${API_BASE_URL}/report/download/${currentContractId}`);
-                            if (!res.ok) { alert('Failed to generate report. Please try again.'); return; }
-                            const blob = await res.blob();
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = `${currentContractName?.replace(/\.[^/.]+$/, '') || 'contract'}_Risk_Report.pdf`;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            URL.revokeObjectURL(url);
-                          } catch (e: any) {
-                            alert('Download failed: ' + e.message);
-                          }
-                        }}
-                        className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-lg border border-gray-300 transition-colors"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
-                        Save to Device
-                      </button>
-                      <a
-                        href={`${API_BASE_URL}/report/download/${currentContractId}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-lg border border-gray-300 transition-colors"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
-                        Open in Browser
-                      </a>
-                    </div>
+                  <div className="p-6">
+                    {!reportContent && !loadingReport && (
+                      <div className="flex flex-col items-center justify-center py-10 text-gray-500">
+                        <FileText className="w-10 h-10 mb-3 opacity-40" />
+                        <p className="text-sm mb-4">Click the button below to generate a full AI-powered legal review report for this contract.</p>
+                        <Button
+                          className="bg-blue-600 hover:bg-blue-700 text-white"
+                          onClick={async () => {
+                            setLoadingReport(true);
+                            try {
+                              const res = await fetch(`${API_BASE_URL}/report/generate/${currentContractId}`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                              });
+                              if (res.ok) {
+                                const data = await res.json();
+                                setReportContent(data.report || 'Report generated but no content returned.');
+                              } else {
+                                const err = await res.text();
+                                setReportContent(`Failed to generate report: ${err}`);
+                              }
+                            } catch (e: any) {
+                              setReportContent(`Error: ${e.message}`);
+                            } finally {
+                              setLoadingReport(false);
+                            }
+                          }}
+                        >
+                          Generate Report
+                        </Button>
+                      </div>
+                    )}
+                    {loadingReport && (
+                      <div className="flex flex-col items-center justify-center py-10 text-gray-500 animate-pulse">
+                        <svg className="animate-spin h-8 w-8 mb-3 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                        <p className="text-sm">Generating report... this may take a minute.</p>
+                      </div>
+                    )}
+                    {reportContent && !loadingReport && (
+                      <div className="space-y-4">
+                        <div className="prose prose-sm prose-blue max-w-none text-gray-800">
+                          <ReactMarkdown>{reportContent}</ReactMarkdown>
+                        </div>
+                        <div className="pt-4 border-t border-gray-100">
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              setReportContent(null);
+                            }}
+                          >
+                            Generate New Report
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

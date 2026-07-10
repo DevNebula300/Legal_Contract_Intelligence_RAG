@@ -7,6 +7,27 @@ from app.core.db import SessionLocal
 
 router = APIRouter()
 
+
+@router.post("/report/generate/{contract_id}")
+def generate_report(contract_id: str):
+    db = SessionLocal()
+    try:
+        contract = db.query(Contract).filter(Contract.id == contract_id).first()
+        if not contract:
+            raise HTTPException(status_code=404, detail="Contract not found")
+    finally:
+        db.close()
+
+    report_data = create_report(contract_id)
+    return {
+        "contract_id": contract_id,
+        "report": report_data.get("report"),
+        "overall_rating": report_data.get("overall_rating"),
+        "risk_score": report_data.get("risk_score"),
+        "max_score": report_data.get("max_score"),
+    }
+
+
 @router.get("/report/download/{contract_id}")
 def download_report(contract_id: str):
     db = SessionLocal()

@@ -11,6 +11,10 @@ from app.core.clause_classifier import classify_chunks
 
 router = APIRouter()
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RAW_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "data", "raw"))
+
+
 def process_contract_background(contract_id: str, file_path: str, ext: str):
     def update_status(status: str):
         db = SessionLocal()
@@ -47,8 +51,8 @@ async def upload_contract(file: UploadFile, background_tasks: BackgroundTasks):
     filename = file.filename
     ext = filename.split(".")[-1].lower()
 
-    os.makedirs("data/raw", exist_ok=True)
-    file_path = f"data/raw/{contract_id}.{ext}"
+    os.makedirs(RAW_DIR, exist_ok=True)
+    file_path = os.path.join(RAW_DIR, f"{contract_id}.{ext}")
 
     with open(file_path, "wb") as f:
         f.write(await file.read())
@@ -92,7 +96,7 @@ def get_contract_file(contract_id: str):
         if not contract:
             raise HTTPException(status_code=404, detail="Contract not found")
         
-        file_path = f"data/raw/{contract.id}.{contract.file_type}"
+        file_path = os.path.join(RAW_DIR, f"{contract.id}.{contract.file_type}")
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="File not found on disk")
             
@@ -103,4 +107,3 @@ def get_contract_file(contract_id: str):
         )
     finally:
         db.close()
-
