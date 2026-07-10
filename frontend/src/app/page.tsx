@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import ReactMarkdown from "react-markdown";
+import PdfViewer from "@/components/PdfViewer";
 
 const API_BASE_URL = 'http://localhost:8000';
 
@@ -133,16 +134,8 @@ export default function Dashboard() {
                 setUploadProgress(100);
                 clearInterval(pollInterval);
                 setRecentUploads(prev => [{ id: cId, name: file.name }, ...prev]);
-                try {
-                  const fileRes = await fetch(`${API_BASE_URL}/contracts/${cId}/file`);
-                  if (fileRes.ok) {
-                    const blob = await fileRes.blob();
-                    const blobUrl = URL.createObjectURL(blob);
-                    setPdfBlobUrl(blobUrl);
-                  }
-                } catch (e) {
-                  console.error("Failed to load PDF blob", e);
-                }
+                // Use same-origin proxy route — avoids CORS block in pdf.js worker
+                setPdfBlobUrl(`/api/pdf/${cId}`);
                 setTimeout(() => {
                   setUploading(false);
                   setActiveView("chat");
@@ -403,22 +396,14 @@ export default function Dashboard() {
                       <div
                         key={idx}
                         className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:border-blue-400 cursor-pointer"
-                        onClick={async () => {
+                        onClick={() => {
                           setCurrentContractId(doc.id);
                           setCurrentContractName(doc.name);
                           setRiskReviewText(null);
                           setReportContent(null);
                           setChatHistory([{ text: "Hello, I am your Legal AI Assistant. How can I help you analyze the document today?", isUser: false }]);
-                          setPdfBlobUrl(null);
-                          try {
-                            const fileRes = await fetch(`${API_BASE_URL}/contracts/${doc.id}/file`);
-                            if (fileRes.ok) {
-                              const blob = await fileRes.blob();
-                              setPdfBlobUrl(URL.createObjectURL(blob));
-                            }
-                          } catch (e) {
-                            console.error("PDF load error", e);
-                          }
+                          // Use same-origin proxy — avoids CORS block in pdf.js worker
+                          setPdfBlobUrl(`/api/pdf/${doc.id}`);
                           setActiveView("chat");
                         }}
                       >
@@ -439,16 +424,12 @@ export default function Dashboard() {
         {activeView === "chat" && (
           <div className="flex gap-6 h-full animate-in fade-in duration-500">
             <div className="flex-[6] bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
-              <div className="p-3 border-b border-gray-200 flex justify-between items-center bg-gray-50 flex-shrink-0">
-                <h3 className="font-semibold text-gray-900 text-sm truncate flex-1 mr-2">{currentContractName || "No Document Selected"}</h3>
-              </div>
               <div className="flex-1 overflow-hidden">
                 {pdfBlobUrl ? (
-                  <iframe
+                  <PdfViewer
                     key={pdfBlobUrl}
-                    src={`${pdfBlobUrl}#toolbar=1&navpanes=0`}
-                    className="w-full h-full border-none"
-                    title="Document Viewer"
+                    url={pdfBlobUrl}
+                    fileName={currentContractName || "document.pdf"}
                   />
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center text-gray-400">
